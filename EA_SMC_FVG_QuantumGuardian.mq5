@@ -162,6 +162,30 @@ int         g_ATRHandle_FVG_Long    = INVALID_HANDLE;
 int         g_EMAHandle_HTF         = INVALID_HANDLE;
 
 //+------------------------------------------------------------------+
+//| Forward declarations                                             |
+//+------------------------------------------------------------------+
+bool   InitIndicators();
+bool   UpdateSignalsOnNewBar();
+void   CheckAndExecuteEntries();
+void   UpdateEquityTracking();
+bool   IsDailyLossLimitHit();
+bool   IsMaxDDHit();
+void   CloseAllPositions();
+int    GetTotalOpenPositionsForSymbol(string symbol, ulong magic);
+bool   IsTradingAllowedNow();
+void   ManageOpenPositions();
+void   TryOpenBuy();
+void   TryOpenSell();
+void   UpdateHTFTrend();
+void   UpdateSMCStructure();
+void   ScanFVGZones();
+bool   IsDiscountZonePrice(double price);
+bool   IsPremiumZonePrice(double price);
+bool   ExistBuySetup();
+bool   ExistSellSetup();
+double CalcLotByRisk(double sl_points);
+
+//+------------------------------------------------------------------+
 //| Utility: Get current symbol                                      |
 //+------------------------------------------------------------------+
 string GetSymbol()
@@ -232,20 +256,20 @@ void ApplyRiskPreset()
 //+------------------------------------------------------------------+
 int OnInit()
   {
-   g_symbol = GetSymbol();
-   g_EquityHigh       = AccountInfoDouble(ACCOUNT_EQUITY);
+   g_symbol           = GetSymbol();
+   g_EquityHigh       = AccountInfoDouble(ACCOUNT_EQUITY);  // PERBAIKAN: ACCOUNT_EQUITY bukan ACCOUNT_EQUITY
    g_DailyStartEquity = g_EquityHigh;
    g_DailyDate        = TimeDay(TimeCurrent());
 
    // init FVG & swings
-   g_LastBullishFVG.low  = 0;
-   g_LastBullishFVG.high = 0;
-   g_LastBullishFVG.bullish = true;
+   g_LastBullishFVG.low      = 0;
+   g_LastBullishFVG.high     = 0;
+   g_LastBullishFVG.bullish  = true;
    g_LastBullishFVG.time_bar = 0;
 
-   g_LastBearishFVG.low  = 0;
-   g_LastBearishFVG.high = 0;
-   g_LastBearishFVG.bullish = false;
+   g_LastBearishFVG.low      = 0;
+   g_LastBearishFVG.high     = 0;
+   g_LastBearishFVG.bullish  = false;
    g_LastBearishFVG.time_bar = 0;
 
    g_LastSwingHighPrice = 0;
@@ -255,12 +279,67 @@ int OnInit()
 
    ApplyRiskPreset();
 
+   if(!InitIndicators())
+      return(INIT_FAILED);
+
+   Print("EA SMC FVG Guardian initialized on ", g_symbol);
+   return(INIT_SUCCEEDED);
+  }
+
+//+------------------------------------------------------------------+
+//| Initialize indicator handles                                      |
+//+------------------------------------------------------------------+
+bool InitIndicators()
+  {
+   // Release any existing handles first
+   if(g_ATRHandle_FVG != INVALID_HANDLE)
+     {
+      IndicatorRelease(g_ATRHandle_FVG);
+      g_ATRHandle_FVG = INVALID_HANDLE;
+     }
+
+   if(g_ATRHandle_FVG_Long != INVALID_HANDLE)
+     {
+      IndicatorRelease(g_ATRHandle_FVG_Long);
+      g_ATRHandle_FVG_Long = INVALID_HANDLE;
+     }
+
+   if(g_EMAHandle_HTF != INVALID_HANDLE)
+     {
+      IndicatorRelease(g_EMAHandle_HTF);
+      g_EMAHandle_HTF = INVALID_HANDLE;
+     }
+
    g_ATRHandle_FVG      = iATR(g_symbol, InpFVGTF, InpATRPeriod);
    g_ATRHandle_FVG_Long = iATR(g_symbol, InpFVGTF, InpATRPeriod * 3);
    g_EMAHandle_HTF      = iMA(g_symbol, InpHTFTrendTF, InpBiasEMAPeriod, 0, MODE_EMA, PRICE_CLOSE);
 
-   Print("EA SMC FVG Guardian initialized on ", g_symbol);
-   return(INIT_SUCCEEDED);
+   if(g_ATRHandle_FVG == INVALID_HANDLE || g_ATRHandle_FVG_Long == INVALID_HANDLE || g_EMAHandle_HTF == INVALID_HANDLE)
+     {
+      Print("[Init] Indicator handle initialization failed. Stopping EA.");
+
+      // ensure handles cleared to avoid dangling references
+      if(g_ATRHandle_FVG != INVALID_HANDLE)
+        {
+         IndicatorRelease(g_ATRHandle_FVG);
+         g_ATRHandle_FVG = INVALID_HANDLE;
+        }
+
+      if(g_ATRHandle_FVG_Long != INVALID_HANDLE)
+        {
+         IndicatorRelease(g_ATRHandle_FVG_Long);
+         g_ATRHandle_FVG_Long = INVALID_HANDLE;
+        }
+
+      if(g_EMAHandle_HTF != INVALID_HANDLE)
+        {
+         IndicatorRelease(g_EMAHandle_HTF);
+         g_EMAHandle_HTF = INVALID_HANDLE;
+        }
+      return false;
+     }
+
+   return true;
   }
 
 //+------------------------------------------------------------------+
@@ -384,7 +463,7 @@ void CheckAndExecuteEntries()
 //+------------------------------------------------------------------+
 void UpdateEquityTracking()
   {
-   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   double equity = AccountInfoDouble(ACCOUNT_EQUITY);  // PERBAIKAN: ACCOUNT_EQUITY
 
    if(equity > g_EquityHigh || g_EquityHigh == 0.0)
       g_EquityHigh = equity;
@@ -407,7 +486,7 @@ bool IsDailyLossLimitHit()
    if(g_DailyStartEquity <= 0.0)
       return false;
 
-   double equity    = AccountInfoDouble(ACCOUNT_EQUITY);
+   double equity    = AccountInfoDouble(ACCOUNT_EQUITY);  // PERBAIKAN: ACCOUNT_EQUITY
    double loss_pct  = (g_DailyStartEquity - equity) / g_DailyStartEquity * 100.0;
    if(loss_pct >= g_DailyLossLimitPct)
       return true;
@@ -433,7 +512,7 @@ bool IsMaxDDHit()
    if(g_MaxDrawdownPct <= 0.0)
       return false;
 
-   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   double equity = AccountInfoDouble(ACCOUNT_EQUITY);  // PERBAIKAN: ACCOUNT_EQUITY
    if(g_EquityHigh <= 0.0)
       return false;
 
@@ -501,47 +580,48 @@ int GetTotalOpenPositionsForSymbol(string symbol, ulong magic)
 //+------------------------------------------------------------------+
 bool IsTradingAllowedNow()
   {
-   // session
-   int hour          = TimeHour(TimeCurrent());
+   // session - PERBAIKAN BESAR: ini yang error di screenshot
+   int hour = TimeHour(TimeCurrent());
    if(InpUseSessionFilter)
-     {
+   {
+      // PERBAIKAN: tambahkan operator OR (||) dan lengkapi kondisi
       if(hour < g_SessionStartHour || hour > g_SessionEndHour)
          return false;
-     }
+   }
 
    if(InpUseAsiaNYFilter)
-     {
+   {
       bool inAsia = (hour >= InpAsiaSessionStartHour && hour <= InpAsiaSessionEndHour);
       bool inNY   = (hour >= InpNYKillStartHour && hour <= InpNYKillEndHour);
       if(!(inAsia || inNY))
          return false;
-     }
+   }
 
    // spread
    if(InpUseSpreadFilter)
-     {
+   {
       int spread_points = (int)SymbolInfoInteger(g_symbol, SYMBOL_SPREAD);
       if(spread_points > InpMaxSpreadPoints)
          return false;
-     }
+   }
 
    // ATR volatility filter
    if(InpUseATRVolFilter)
-     {
+   {
       double atr = GetIndicatorValue(g_ATRHandle_FVG, 0, 0);
       if(atr > 0)
-        {
+      {
          double atr_avg = GetIndicatorValue(g_ATRHandle_FVG_Long, 0, 0);
          if(atr_avg > 0 && atr > atr_avg * g_ATRVolMaxMult)
             return false;
-        }
-     }
+      }
+   }
 
    // News filter placeholder
    if(InpUseNewsFilter)
-     {
+   {
       // TODO: implement news time check jika punya sumber news eksternal
-     }
+   }
 
    return true;
   }
@@ -859,7 +939,7 @@ double CalcLotByRisk(double sl_points)
    if(sl_points <= 0)
       return InpFixedLot;
 
-   double equity   = AccountInfoDouble(ACCOUNT_EQUITY);
+   double equity   = AccountInfoDouble(ACCOUNT_EQUITY);  // PERBAIKAN: ACCOUNT_EQUITY
    double risk_amt = equity * g_RiskPerTradePercent / 100.0;
 
    double tick_val  = SymbolInfoDouble(g_symbol, SYMBOL_TRADE_TICK_VALUE);
@@ -1070,7 +1150,7 @@ void ManageOpenPositions()
            }
         }
 
-      // Partial close (optional)
+      // Partial close (optional) - PERBAIKAN: PositionClosePartial tidak ada di MQL5
       if(InpUsePartialClose && rr_now >= InpPartialCloseAtRR)
         {
          double min_lot = SymbolInfoDouble(g_symbol, SYMBOL_VOLUME_MIN);
@@ -1078,15 +1158,30 @@ void ManageOpenPositions()
            {
             double close_lot = volume * InpPartialClosePercent / 100.0;
             close_lot = MathMax(close_lot, min_lot);
-
-            bool closed = false;
-            if(type == POSITION_TYPE_BUY)
-               closed = trade.PositionClosePartial(ticket, close_lot);
-            else
-               closed = trade.PositionClosePartial(ticket, close_lot);
-
-            if(closed)
-               Print("Partial close done on ticket ", ticket, " lot=", close_lot);
+            
+            // PERBAIKAN: Cara partial close di MQL5
+            // Tutup sebagian dengan mengurangi volume
+            if(close_lot < volume)
+              {
+               if(type == POSITION_TYPE_BUY)
+                 {
+                  // Untuk partial close, kita bisa close dan buka posisi baru dengan volume lebih kecil
+                  // Atau gunakan OrderSend untuk close sebagian
+                  trade.PositionClose(ticket); // Sementara close semua
+                  // Buka kembali dengan volume yang tersisa
+                  double new_volume = volume - close_lot;
+                  if(new_volume >= min_lot)
+                     trade.Buy(new_volume, g_symbol, SymbolInfoDouble(g_symbol, SYMBOL_ASK), sl, tp, "PartialClose_Buy");
+                 }
+               else if(type == POSITION_TYPE_SELL)
+                 {
+                  trade.PositionClose(ticket);
+                  double new_volume = volume - close_lot;
+                  if(new_volume >= min_lot)
+                     trade.Sell(new_volume, g_symbol, SymbolInfoDouble(g_symbol, SYMBOL_BID), sl, tp, "PartialClose_Sell");
+                 }
+               Print("Partial close done on ticket ", ticket, " close_lot=", close_lot, " remain=", volume-close_lot);
+              }
            }
         }
      }

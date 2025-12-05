@@ -282,6 +282,12 @@ int OnInit()
    g_ATRHandle_FVG_Long = iATR(g_symbol, InpFVGTF, InpATRPeriod * 3);
    g_EMAHandle_HTF      = iMA(g_symbol, InpHTFTrendTF, InpBiasEMAPeriod, 0, MODE_EMA, PRICE_CLOSE);
 
+   if(g_ATRHandle_FVG == INVALID_HANDLE || g_ATRHandle_FVG_Long == INVALID_HANDLE || g_EMAHandle_HTF == INVALID_HANDLE)
+     {
+      Print("[Init] Indicator handle initialization failed. Stopping EA.");
+      return(INIT_FAILED);
+     }
+
    Print("EA SMC FVG Guardian initialized on ", g_symbol);
    return(INIT_SUCCEEDED);
   }

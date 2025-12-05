@@ -235,7 +235,7 @@ int OnInit()
    g_symbol = GetSymbol();
    g_EquityHigh       = AccountInfoDouble(ACCOUNT_EQUITY);
    g_DailyStartEquity = g_EquityHigh;
-   g_DailyDate           = TimeDay(TimeCurrent());
+   g_DailyDate        = TimeDay(TimeCurrent());
 
    // init FVG & swings
    g_LastBullishFVG.low  = 0;
@@ -386,10 +386,12 @@ void UpdateEquityTracking()
   {
    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
 
+   datetime now_time = TimeCurrent();
+
    if(equity > g_EquityHigh || g_EquityHigh == 0.0)
       g_EquityHigh = equity;
 
-   int cur_date          = TimeDay(TimeCurrent());
+   int cur_date          = TimeDay(now_time);
 
    if(cur_date != g_DailyDate)
      {
@@ -502,7 +504,8 @@ int GetTotalOpenPositionsForSymbol(string symbol, ulong magic)
 bool IsTradingAllowedNow()
   {
    // session
-   int hour              = TimeHour(TimeCurrent());
+   datetime now_time = TimeCurrent();
+   int hour          = TimeHour(now_time);
    if(InpUseSessionFilter)
      {
       if(hour < g_SessionStartHour || hour > g_SessionEndHour)

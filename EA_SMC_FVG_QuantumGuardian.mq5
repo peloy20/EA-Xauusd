@@ -256,20 +256,20 @@ void ApplyRiskPreset()
 //+------------------------------------------------------------------+
 int OnInit()
   {
-   g_symbol = GetSymbol();
+   g_symbol           = GetSymbol();
    g_EquityHigh       = AccountInfoDouble(ACCOUNT_EQUITY);
    g_DailyStartEquity = g_EquityHigh;
    g_DailyDate        = TimeDay(TimeCurrent());
 
    // init FVG & swings
-   g_LastBullishFVG.low  = 0;
-   g_LastBullishFVG.high = 0;
-   g_LastBullishFVG.bullish = true;
+   g_LastBullishFVG.low      = 0;
+   g_LastBullishFVG.high     = 0;
+   g_LastBullishFVG.bullish  = true;
    g_LastBullishFVG.time_bar = 0;
 
-   g_LastBearishFVG.low  = 0;
-   g_LastBearishFVG.high = 0;
-   g_LastBearishFVG.bullish = false;
+   g_LastBearishFVG.low      = 0;
+   g_LastBearishFVG.high     = 0;
+   g_LastBearishFVG.bullish  = false;
    g_LastBearishFVG.time_bar = 0;
 
    g_LastSwingHighPrice = 0;

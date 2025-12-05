@@ -46,7 +46,7 @@ input bool     InpUseCurrentSymbol    = true;
 input ENUM_TIMEFRAMES InpHTFTrendTF   = PERIOD_H1;   // TF trend
 input ENUM_TIMEFRAMES InpSMCTF        = PERIOD_M15;  // TF struktur SMC (bisa diubah ke PERIOD_M5)
 input ENUM_TIMEFRAMES InpFVGTF        = PERIOD_M5;   // TF FVG utama / eksekusi
-input bool   InpWaitForCandleClose    = true;         // true = cek sinyal saat bar baru, false = intrabar entry
+input bool   InpWaitForCandleClose    = true;        // true = cek sinyal saat bar baru, false = intrabar entry
 
 // Risk management (BASE, akan di-adjust oleh preset)
 input double InpRiskPerTradePercent   = 1.0;    // 1-1.5% per trade
@@ -386,12 +386,10 @@ void UpdateEquityTracking()
   {
    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
 
-   datetime now_time = TimeCurrent();
-
    if(equity > g_EquityHigh || g_EquityHigh == 0.0)
       g_EquityHigh = equity;
 
-   int cur_date          = TimeDay(now_time);
+   int cur_date = TimeDay(TimeCurrent());
 
    if(cur_date != g_DailyDate)
      {
@@ -503,9 +501,9 @@ int GetTotalOpenPositionsForSymbol(string symbol, ulong magic)
 //+------------------------------------------------------------------+
 bool IsTradingAllowedNow()
   {
+   int hour = TimeHour(TimeCurrent());
+
    // session
-   datetime now_time = TimeCurrent();
-   int hour          = TimeHour(now_time);
    if(InpUseSessionFilter)
      {
       if(hour < g_SessionStartHour || hour > g_SessionEndHour)
@@ -573,9 +571,6 @@ void UpdateHTFTrend()
 
 //+------------------------------------------------------------------+
 //| Update SMC Structure: find last swing high/low with min distance |
-//| Cari swing high/low terakhir di TF SMC, dengan filter jarak      |
-//| minimal (InpSMCMinSwingSizePoints) untuk dipakai sebagai level   |
-//| likuiditas utama.                                                |
 //+------------------------------------------------------------------+
 void UpdateSMCStructure()
   {
@@ -700,7 +695,6 @@ void ScanFVGZones()
 //+------------------------------------------------------------------+
 bool IsDiscountZonePrice(double price)
   {
-   // ambil range M15/M5 terakhir dari InpSMCSwingLookback bar
    int bars = iBars(g_symbol, InpSMCTF);
    if(bars < InpSMCSwingLookback + 5)
       return true; // kalau data kurang, jangan blokir
@@ -766,11 +760,9 @@ bool IsPremiumZonePrice(double price)
 //+------------------------------------------------------------------+
 bool ExistBuySetup()
   {
-   // Trend filter
    if(InpOnlyTradeWithTrend && g_TrendBias != TREND_BULL)
       return false;
 
-   // FVG bullish valid?
    if(!InpUseFVG || g_LastBullishFVG.high <= 0.0 || g_LastBullishFVG.low <= 0.0)
       return false;
 
@@ -778,29 +770,24 @@ bool ExistBuySetup()
    if(bid <= 0)
       return false;
 
-   // harga harus berada di dalam / dekat zona FVG
    if(bid < g_LastBullishFVG.low || bid > g_LastBullishFVG.high)
       return false;
 
-   // premium/discount zone
    if(InpRequirePremiumDiscount && !IsDiscountZonePrice(bid))
       return false;
 
-   // SMC: butuh swing low + liquidity sweep + CHoCH simple
    if(InpUseSMC)
      {
       int smcBars = iBars(g_symbol, InpSMCTF);
       if(g_LastSwingLowPrice <= 0 || smcBars < 3)
          return false;
 
-      // Liquidity sweep: candle sebelumnya tusuk swing low lalu close di atas swing
       double lowPrev   = iLow(g_symbol, InpSMCTF, 1);
       double closePrev = iClose(g_symbol, InpSMCTF, 1);
       bool sweptLow = (lowPrev < g_LastSwingLowPrice && closePrev > g_LastSwingLowPrice);
       if(!sweptLow)
          return false;
 
-      // CHoCH: candle sekarang close di atas high candle sebelumnya
       double closeNow = iClose(g_symbol, InpSMCTF, 0);
       double highPrev = iHigh(g_symbol, InpSMCTF, 1);
       if(!(closeNow > highPrev))
@@ -837,14 +824,12 @@ bool ExistSellSetup()
       if(g_LastSwingHighPrice <= 0 || smcBars < 3)
          return false;
 
-      // Liquidity sweep: candle sebelumnya tusuk swing high lalu close di bawah swing
       double highPrev   = iHigh(g_symbol, InpSMCTF, 1);
       double closePrev  = iClose(g_symbol, InpSMCTF, 1);
       bool sweptHigh = (highPrev > g_LastSwingHighPrice && closePrev < g_LastSwingHighPrice);
       if(!sweptHigh)
          return false;
 
-      // CHoCH: candle sekarang close di bawah low candle sebelumnya
       double closeNow = iClose(g_symbol, InpSMCTF, 0);
       double lowPrev  = iLow(g_symbol, InpSMCTF, 1);
       if(!(closeNow < lowPrev))
@@ -897,7 +882,6 @@ void TryOpenBuy()
    if(ask <= 0 || bid <= 0)
       return;
 
-   // SL: default bawah FVG low
    double baseSL = g_LastBullishFVG.low;
 
    if(InpUseStructureSL && g_LastSwingLowPrice > 0)
@@ -1018,7 +1002,7 @@ void ManageOpenPositions()
             trade.PositionModify(ticket, new_sl, tp);
         }
 
-      // Adaptive trailing ala Quantum Queen (prioritas di atas ATR trailing biasa)
+      // Adaptive trailing ala Quantum Queen
       if(InpUseAdaptiveTrailing)
         {
          double atr = GetIndicatorValue(g_ATRHandle_FVG, 0, 0);
@@ -1082,12 +1066,7 @@ void ManageOpenPositions()
             double close_lot = volume * InpPartialClosePercent / 100.0;
             close_lot = MathMax(close_lot, min_lot);
 
-            bool closed = false;
-            if(type == POSITION_TYPE_BUY)
-               closed = trade.PositionClosePartial(ticket, close_lot);
-            else
-               closed = trade.PositionClosePartial(ticket, close_lot);
-
+            bool closed = trade.PositionClosePartial(ticket, close_lot);
             if(closed)
                Print("Partial close done on ticket ", ticket, " lot=", close_lot);
            }

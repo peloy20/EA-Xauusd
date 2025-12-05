@@ -46,9 +46,10 @@ input bool     InpUseCurrentSymbol    = true;
 input ENUM_TIMEFRAMES InpHTFTrendTF   = PERIOD_H1;   // TF trend
 input ENUM_TIMEFRAMES InpSMCTF        = PERIOD_M15;  // TF struktur SMC (bisa diubah ke PERIOD_M5)
 input ENUM_TIMEFRAMES InpFVGTF        = PERIOD_M5;   // TF FVG utama / eksekusi
+input bool   InpWaitForCandleClose    = true;         // true = cek sinyal saat bar baru, false = intrabar entry
 
 // Risk management (BASE, akan di-adjust oleh preset)
-input double InpRiskPerTradePercent   = 1.0;    // 1–1.5% per trade
+input double InpRiskPerTradePercent   = 1.0;    // 1-1.5% per trade
 input bool   InpUseFixedLot           = true;
 input double InpFixedLot              = 0.01;
 input int    InpMaxOpenPositions      = 3;      // total posisi max
@@ -88,6 +89,11 @@ input bool   InpUseATRTrailing        = true;
 input int    InpATRPeriod             = 14;
 input double InpATRTrailMultiplier    = 1.0;    // ATR x multiplier
 input double InpATRTrailTriggerRR     = 1.5;    // mulai trailing di 1.5R
+input bool   InpUseAdaptiveTrailing   = true;
+input double InpATRFastMultiplier     = 0.8;
+input double InpATRSlowMultiplier     = 1.5;
+input double InpAdaptiveStartRR       = 1.0;    // mulai adaptif setelah 1R
+input double InpAdaptiveStrongRR      = 2.0;    // trailing lebih ketat di atas 2R
 
 // Compensation / Recovery (tanpa martingale)
 input bool   InpUseCompensation       = true;
@@ -98,12 +104,17 @@ input bool   InpIncreaseLotOnRecovery = false;  // untuk modal kecil: false
 input bool   InpUseSessionFilter      = true;
 input int    InpSessionStartHour      = 7;      // server time
 input int    InpSessionEndHour        = 14;
+input bool   InpUseAsiaNYFilter       = true;
+input int    InpAsiaSessionStartHour  = 2;      // server time Asia session
+input int    InpAsiaSessionEndHour    = 8;
+input int    InpNYKillStartHour       = 13;     // New York Kill Zone start
+input int    InpNYKillEndHour         = 17;
 
 input bool   InpUseSpreadFilter       = true;
 input int    InpMaxSpreadPoints       = 300;
 
 input bool   InpUseATRVolFilter       = true;
-input double InpATRVolMaxMultiplier   = 3.0;    // jika ATR > 3x rata2 → pause
+input double InpATRVolMaxMultiplier   = 3.0;    // jika ATR > 3x rata2 -> pause
 
 // Optional features
 input bool   InpUseNewsFilter         = false;  // placeholder
@@ -146,6 +157,9 @@ double      g_MaxDrawdownPct        = 25.0;
 double      g_ATRVolMaxMult         = 3.0;
 int         g_SessionStartHour      = 7;
 int         g_SessionEndHour        = 14;
+int         g_ATRHandle_FVG         = INVALID_HANDLE;
+int         g_ATRHandle_FVG_Long    = INVALID_HANDLE;
+int         g_EMAHandle_HTF         = INVALID_HANDLE;
 
 //+------------------------------------------------------------------+
 //| Utility: Get current symbol                                      |
@@ -241,6 +255,10 @@ int OnInit()
 
    ApplyRiskPreset();
 
+   g_ATRHandle_FVG      = iATR(g_symbol, InpFVGTF, InpATRPeriod);
+   g_ATRHandle_FVG_Long = iATR(g_symbol, InpFVGTF, InpATRPeriod * 3);
+   g_EMAHandle_HTF      = iMA(g_symbol, InpHTFTrendTF, InpBiasEMAPeriod, 0, MODE_EMA, PRICE_CLOSE);
+
    Print("EA SMC FVG Guardian initialized on ", g_symbol);
    return(INIT_SUCCEEDED);
   }
@@ -250,7 +268,29 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
   {
+   if(g_ATRHandle_FVG != INVALID_HANDLE)
+      IndicatorRelease(g_ATRHandle_FVG);
+   if(g_ATRHandle_FVG_Long != INVALID_HANDLE)
+      IndicatorRelease(g_ATRHandle_FVG_Long);
+   if(g_EMAHandle_HTF != INVALID_HANDLE)
+      IndicatorRelease(g_EMAHandle_HTF);
+
    Print("EA SMC FVG Guardian deinitialized. Reason = ", reason);
+  }
+
+//+------------------------------------------------------------------+
+//| Helper: read indicator buffer value using CopyBuffer             |
+//+------------------------------------------------------------------+
+double GetIndicatorValue(int handle,int buffer,int shift)
+  {
+   if(handle == INVALID_HANDLE)
+      return 0.0;
+
+   double values[];
+   if(CopyBuffer(handle, buffer, shift, 1, values) <= 0)
+      return 0.0;
+
+   return values[0];
   }
 
 //+------------------------------------------------------------------+
@@ -278,47 +318,65 @@ void OnTick()
       return;
      }
 
-   // Basic trade allowed check (session, spread, ATR, news)
-   if(!IsTradingAllowedNow())
-      return;
-
    // Manage existing positions: BE, Trailing, Partial Close, dll
    ManageOpenPositions();
+
+   bool newBar = UpdateSignalsOnNewBar();
+
+   // Basic trade allowed check (session, spread, ATR, news)
+   bool allowed = IsTradingAllowedNow();
 
    // Check jumlah posisi
    if(GetTotalOpenPositionsForSymbol(g_symbol, InpMagic) >= g_MaxOpenPositions)
       return;
 
-   // Signal check hanya ketika ada bar baru di TF FVG (M5)
+   bool shouldCheckEntries = (!InpWaitForCandleClose || newBar);
+
+   if(shouldCheckEntries && allowed)
+      CheckAndExecuteEntries();
+  }
+
+//+------------------------------------------------------------------+
+//| Update signals only when a new bar forms on FVG TF               |
+//+------------------------------------------------------------------+
+bool UpdateSignalsOnNewBar()
+  {
    datetime bar_time = iTime(g_symbol, InpFVGTF, 0);
    if(bar_time == 0)
+      return false;
+
+   if(bar_time == g_lastSignalBarTime)
+      return false;
+
+   g_lastSignalBarTime = bar_time;
+
+   // 1. Update trend HTF
+   UpdateHTFTrend();
+
+   // 2. Update SMC structure (swing + liquidity sweep)
+   if(InpUseSMC)
+      UpdateSMCStructure();
+
+   // 3. Scan FVG zones
+   if(InpUseFVG)
+      ScanFVGZones();
+
+   return true;
+  }
+
+//+------------------------------------------------------------------+
+//| Check SMC/FVG setup and execute entries                          |
+//+------------------------------------------------------------------+
+void CheckAndExecuteEntries()
+  {
+   if(!(InpUseSMC && InpUseFVG))
       return;
 
-   if(bar_time != g_lastSignalBarTime)
-     {
-      g_lastSignalBarTime = bar_time;
+   if(ExistBuySetup())
+      TryOpenBuy();
 
-      // 1. Update trend HTF
-      UpdateHTFTrend();
-
-      // 2. Update SMC structure (swing + liquidity sweep)
-      if(InpUseSMC)
-         UpdateSMCStructure();
-
-      // 3. Scan FVG zones
-      if(InpUseFVG)
-         ScanFVGZones();
-
-      // 4. Cek setup BUY/SELL
-      if(InpUseSMC && InpUseFVG)
-        {
-         if(ExistBuySetup())
-            TryOpenBuy();
-
-         if(ExistSellSetup())
-            TryOpenSell();
-        }
-     }
+   if(ExistSellSetup())
+      TryOpenSell();
   }
 
 //+------------------------------------------------------------------+
@@ -331,8 +389,7 @@ void UpdateEquityTracking()
    if(equity > g_EquityHigh || g_EquityHigh == 0.0)
       g_EquityHigh = equity;
 
-   datetime now      = TimeCurrent();
-   int      cur_date = TimeDay(now);
+   int cur_date          = TimeDay(TimeCurrent());
 
    if(cur_date != g_DailyDate)
      {
@@ -444,13 +501,19 @@ int GetTotalOpenPositionsForSymbol(string symbol, ulong magic)
 //+------------------------------------------------------------------+
 bool IsTradingAllowedNow()
   {
-   datetime now = TimeCurrent();
-
    // session
+   int hour          = TimeHour(TimeCurrent());
    if(InpUseSessionFilter)
      {
-      int hour = TimeHour(now);
       if(hour < g_SessionStartHour || hour > g_SessionEndHour)
+         return false;
+     }
+
+   if(InpUseAsiaNYFilter)
+     {
+      bool inAsia = (hour >= InpAsiaSessionStartHour && hour <= InpAsiaSessionEndHour);
+      bool inNY   = (hour >= InpNYKillStartHour && hour <= InpNYKillEndHour);
+      if(!(inAsia || inNY))
          return false;
      }
 
@@ -465,10 +528,10 @@ bool IsTradingAllowedNow()
    // ATR volatility filter
    if(InpUseATRVolFilter)
      {
-      double atr = iATR(g_symbol, InpFVGTF, InpATRPeriod, 0);
+      double atr = GetIndicatorValue(g_ATRHandle_FVG, 0, 0);
       if(atr > 0)
         {
-         double atr_avg = iATR(g_symbol, InpFVGTF, InpATRPeriod * 3, 0);
+         double atr_avg = GetIndicatorValue(g_ATRHandle_FVG_Long, 0, 0);
          if(atr_avg > 0 && atr > atr_avg * g_ATRVolMaxMult)
             return false;
         }
@@ -488,7 +551,7 @@ bool IsTradingAllowedNow()
 //+------------------------------------------------------------------+
 void UpdateHTFTrend()
   {
-   double ema   = iMA(g_symbol, InpHTFTrendTF, InpBiasEMAPeriod, 0, MODE_EMA, PRICE_CLOSE, 0);
+   double ema   = GetIndicatorValue(g_EMAHandle_HTF, 0, 0);
    double price = iClose(g_symbol, InpHTFTrendTF, 0);
 
    if(ema == 0.0)
@@ -506,7 +569,10 @@ void UpdateHTFTrend()
   }
 
 //+------------------------------------------------------------------+
-//| Update SMC Structure: find last swing high/low                   |
+//| Update SMC Structure: find last swing high/low with min distance |
+//| Cari swing high/low terakhir di TF SMC, dengan filter jarak      |
+//| minimal (InpSMCMinSwingSizePoints) untuk dipakai sebagai level   |
+//| likuiditas utama.                                                |
 //+------------------------------------------------------------------+
 void UpdateSMCStructure()
   {
@@ -521,20 +587,23 @@ void UpdateSMCStructure()
 
    int maxLook = MathMin(InpSMCSwingLookback + 10, bars - 3);
 
-   // Cari swing dari belakang: bar 3 s/d maxLook
-   for(int i = 3; i <= maxLook; i++)
+   // Cari swing dari belakang: bar 2 s/d maxLook
+   for(int i = 2; i <= maxLook; i++)
      {
       double h = iHigh(g_symbol, InpSMCTF, i);
       double l = iLow(g_symbol, InpSMCTF, i);
-      bool isSwingHigh = (h > iHigh(g_symbol, InpSMCTF, i + 1) &&
-                          h > iHigh(g_symbol, InpSMCTF, i - 1));
-      bool isSwingLow  = (l < iLow(g_symbol, InpSMCTF, i + 1) &&
-                          l < iLow(g_symbol, InpSMCTF, i - 1));
+      double prevHigh = iHigh(g_symbol, InpSMCTF, i + 1);
+      double nextHigh = iHigh(g_symbol, InpSMCTF, i - 1);
+      double prevLow  = iLow(g_symbol, InpSMCTF, i + 1);
+      double nextLow  = iLow(g_symbol, InpSMCTF, i - 1);
 
-      // optional: filter ukuran swing minimal (points)
+      bool isSwingHigh = (h > prevHigh && h > nextHigh);
+      bool isSwingLow  = (l < prevLow && l < nextLow);
+
       if(isSwingHigh)
         {
-         double distPoints = (h - iLow(g_symbol, InpSMCTF, i + 1)) / _Point;
+         double refLow     = MathMin(prevLow, nextLow);
+         double distPoints = (h - refLow) / _Point;
          if(distPoints >= InpSMCMinSwingSizePoints)
            {
             lastHighPrice = h;
@@ -544,7 +613,8 @@ void UpdateSMCStructure()
 
       if(isSwingLow)
         {
-         double distPoints = (iHigh(g_symbol, InpSMCTF, i + 1) - l) / _Point;
+         double refHigh    = MathMax(prevHigh, nextHigh);
+         double distPoints = (refHigh - l) / _Point;
          if(distPoints >= InpSMCMinSwingSizePoints)
            {
             lastLowPrice = l;
@@ -553,13 +623,13 @@ void UpdateSMCStructure()
         }
      }
 
-   if(lastHighPrice > 0)
+   if(lastHighPrice > 0.0)
      {
       g_LastSwingHighPrice = lastHighPrice;
       g_LastSwingHighTime  = lastHighTime;
      }
 
-   if(lastLowPrice > 0)
+   if(lastLowPrice > 0.0)
      {
       g_LastSwingLowPrice = lastLowPrice;
       g_LastSwingLowTime  = lastLowTime;
@@ -716,19 +786,18 @@ bool ExistBuySetup()
    // SMC: butuh swing low + liquidity sweep + CHoCH simple
    if(InpUseSMC)
      {
-      if(g_LastSwingLowPrice <= 0)
+      int smcBars = iBars(g_symbol, InpSMCTF);
+      if(g_LastSwingLowPrice <= 0 || smcBars < 3)
          return false;
 
-      // Liquidity sweep: low candle sebelumnya tusuk lebih rendah dari swing low,
-      // lalu close di atas swing low
+      // Liquidity sweep: candle sebelumnya tusuk swing low lalu close di atas swing
       double lowPrev   = iLow(g_symbol, InpSMCTF, 1);
       double closePrev = iClose(g_symbol, InpSMCTF, 1);
-
       bool sweptLow = (lowPrev < g_LastSwingLowPrice && closePrev > g_LastSwingLowPrice);
       if(!sweptLow)
          return false;
 
-      // CHoCH / BOS simple: close candle sekarang > high candle sebelumnya
+      // CHoCH: candle sekarang close di atas high candle sebelumnya
       double closeNow = iClose(g_symbol, InpSMCTF, 0);
       double highPrev = iHigh(g_symbol, InpSMCTF, 1);
       if(!(closeNow > highPrev))
@@ -761,18 +830,18 @@ bool ExistSellSetup()
 
    if(InpUseSMC)
      {
-      if(g_LastSwingHighPrice <= 0)
+      int smcBars = iBars(g_symbol, InpSMCTF);
+      if(g_LastSwingHighPrice <= 0 || smcBars < 3)
          return false;
 
-      // Liquidity sweep: high candle sebelumnya tusuk lebih tinggi dari swing high,
-      // lalu close di bawah swing high
+      // Liquidity sweep: candle sebelumnya tusuk swing high lalu close di bawah swing
       double highPrev   = iHigh(g_symbol, InpSMCTF, 1);
       double closePrev  = iClose(g_symbol, InpSMCTF, 1);
       bool sweptHigh = (highPrev > g_LastSwingHighPrice && closePrev < g_LastSwingHighPrice);
       if(!sweptHigh)
          return false;
 
-      // CHoCH simple: close candle sekarang < low candle sebelumnya
+      // CHoCH: candle sekarang close di bawah low candle sebelumnya
       double closeNow = iClose(g_symbol, InpSMCTF, 0);
       double lowPrev  = iLow(g_symbol, InpSMCTF, 1);
       if(!(closeNow < lowPrev))
@@ -946,10 +1015,41 @@ void ManageOpenPositions()
             trade.PositionModify(ticket, new_sl, tp);
         }
 
-      // ATR Trailing
-      if(InpUseATRTrailing && rr_now >= InpATRTrailTriggerRR)
+      // Adaptive trailing ala Quantum Queen (prioritas di atas ATR trailing biasa)
+      if(InpUseAdaptiveTrailing)
         {
-         double atr = iATR(g_symbol, InpFVGTF, InpATRPeriod, 0);
+         double atr = GetIndicatorValue(g_ATRHandle_FVG, 0, 0);
+         if(atr > 0)
+           {
+            double trailMult = 0.0;
+            if(rr_now >= InpAdaptiveStrongRR)
+               trailMult = InpATRFastMultiplier;
+            else if(rr_now >= InpAdaptiveStartRR)
+               trailMult = InpATRSlowMultiplier;
+
+            if(trailMult > 0.0)
+              {
+               double trail_dist = atr * trailMult;
+               double new_sl = 0.0;
+
+               if(type == POSITION_TYPE_BUY)
+                 {
+                  new_sl = price_now - trail_dist;
+                  if((sl <= 0 || new_sl > sl) && new_sl < price_now)
+                     trade.PositionModify(ticket, new_sl, tp);
+                 }
+               else if(type == POSITION_TYPE_SELL)
+                 {
+                  new_sl = price_now + trail_dist;
+                  if((sl <= 0 || new_sl < sl) && new_sl > price_now)
+                     trade.PositionModify(ticket, new_sl, tp);
+                 }
+              }
+           }
+        }
+      else if(InpUseATRTrailing && rr_now >= InpATRTrailTriggerRR)
+        {
+         double atr = GetIndicatorValue(g_ATRHandle_FVG, 0, 0);
          if(atr > 0)
            {
             double trail_dist = atr * InpATRTrailMultiplier;

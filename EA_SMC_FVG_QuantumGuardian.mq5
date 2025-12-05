@@ -49,7 +49,7 @@ input ENUM_TIMEFRAMES InpFVGTF        = PERIOD_M5;   // TF FVG utama / eksekusi
 input bool   InpWaitForCandleClose    = true;         // true = cek sinyal saat bar baru, false = intrabar entry
 
 // Risk management (BASE, akan di-adjust oleh preset)
-input double InpRiskPerTradePercent   = 1.0;    // 1–1.5% per trade
+input double InpRiskPerTradePercent   = 1.0;    // 1-1.5% per trade
 input bool   InpUseFixedLot           = true;
 input double InpFixedLot              = 0.01;
 input int    InpMaxOpenPositions      = 3;      // total posisi max
@@ -114,7 +114,7 @@ input bool   InpUseSpreadFilter       = true;
 input int    InpMaxSpreadPoints       = 300;
 
 input bool   InpUseATRVolFilter       = true;
-input double InpATRVolMaxMultiplier   = 3.0;    // jika ATR > 3x rata2 → pause
+input double InpATRVolMaxMultiplier   = 3.0;    // jika ATR > 3x rata2 -> pause
 
 // Optional features
 input bool   InpUseNewsFilter         = false;  // placeholder

@@ -164,6 +164,7 @@ int         g_EMAHandle_HTF         = INVALID_HANDLE;
 //+------------------------------------------------------------------+
 //| Forward declarations                                             |
 //+------------------------------------------------------------------+
+bool   InitIndicators();
 bool   UpdateSignalsOnNewBar();
 void   CheckAndExecuteEntries();
 void   UpdateEquityTracking();
@@ -278,6 +279,37 @@ int OnInit()
 
    ApplyRiskPreset();
 
+   if(!InitIndicators())
+      return(INIT_FAILED);
+
+   Print("EA SMC FVG Guardian initialized on ", g_symbol);
+   return(INIT_SUCCEEDED);
+  }
+
+//+------------------------------------------------------------------+
+//| Initialize indicator handles                                      |
+//+------------------------------------------------------------------+
+bool InitIndicators()
+  {
+   // Release any existing handles first
+   if(g_ATRHandle_FVG != INVALID_HANDLE)
+     {
+      IndicatorRelease(g_ATRHandle_FVG);
+      g_ATRHandle_FVG = INVALID_HANDLE;
+     }
+
+   if(g_ATRHandle_FVG_Long != INVALID_HANDLE)
+     {
+      IndicatorRelease(g_ATRHandle_FVG_Long);
+      g_ATRHandle_FVG_Long = INVALID_HANDLE;
+     }
+
+   if(g_EMAHandle_HTF != INVALID_HANDLE)
+     {
+      IndicatorRelease(g_EMAHandle_HTF);
+      g_EMAHandle_HTF = INVALID_HANDLE;
+     }
+
    g_ATRHandle_FVG      = iATR(g_symbol, InpFVGTF, InpATRPeriod);
    g_ATRHandle_FVG_Long = iATR(g_symbol, InpFVGTF, InpATRPeriod * 3);
    g_EMAHandle_HTF      = iMA(g_symbol, InpHTFTrendTF, InpBiasEMAPeriod, 0, MODE_EMA, PRICE_CLOSE);
@@ -285,11 +317,29 @@ int OnInit()
    if(g_ATRHandle_FVG == INVALID_HANDLE || g_ATRHandle_FVG_Long == INVALID_HANDLE || g_EMAHandle_HTF == INVALID_HANDLE)
      {
       Print("[Init] Indicator handle initialization failed. Stopping EA.");
-      return(INIT_FAILED);
+
+      // ensure handles cleared to avoid dangling references
+      if(g_ATRHandle_FVG != INVALID_HANDLE)
+        {
+         IndicatorRelease(g_ATRHandle_FVG);
+         g_ATRHandle_FVG = INVALID_HANDLE;
+        }
+
+      if(g_ATRHandle_FVG_Long != INVALID_HANDLE)
+        {
+         IndicatorRelease(g_ATRHandle_FVG_Long);
+         g_ATRHandle_FVG_Long = INVALID_HANDLE;
+        }
+
+      if(g_EMAHandle_HTF != INVALID_HANDLE)
+        {
+         IndicatorRelease(g_EMAHandle_HTF);
+         g_EMAHandle_HTF = INVALID_HANDLE;
+        }
+      return false;
      }
 
-   Print("EA SMC FVG Guardian initialized on ", g_symbol);
-   return(INIT_SUCCEEDED);
+   return true;
   }
 
 //+------------------------------------------------------------------+

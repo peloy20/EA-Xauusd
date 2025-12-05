@@ -157,6 +157,9 @@ double      g_MaxDrawdownPct        = 25.0;
 double      g_ATRVolMaxMult         = 3.0;
 int         g_SessionStartHour      = 7;
 int         g_SessionEndHour        = 14;
+int         g_ATRHandle_FVG         = INVALID_HANDLE;
+int         g_ATRHandle_FVG_Long    = INVALID_HANDLE;
+int         g_EMAHandle_HTF         = INVALID_HANDLE;
 
 //+------------------------------------------------------------------+
 //| Utility: Get current symbol                                      |
@@ -252,6 +255,10 @@ int OnInit()
 
    ApplyRiskPreset();
 
+   g_ATRHandle_FVG      = iATR(g_symbol, InpFVGTF, InpATRPeriod);
+   g_ATRHandle_FVG_Long = iATR(g_symbol, InpFVGTF, InpATRPeriod * 3);
+   g_EMAHandle_HTF      = iMA(g_symbol, InpHTFTrendTF, InpBiasEMAPeriod, 0, MODE_EMA, PRICE_CLOSE);
+
    Print("EA SMC FVG Guardian initialized on ", g_symbol);
    return(INIT_SUCCEEDED);
   }
@@ -261,7 +268,29 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
   {
+   if(g_ATRHandle_FVG != INVALID_HANDLE)
+      IndicatorRelease(g_ATRHandle_FVG);
+   if(g_ATRHandle_FVG_Long != INVALID_HANDLE)
+      IndicatorRelease(g_ATRHandle_FVG_Long);
+   if(g_EMAHandle_HTF != INVALID_HANDLE)
+      IndicatorRelease(g_EMAHandle_HTF);
+
    Print("EA SMC FVG Guardian deinitialized. Reason = ", reason);
+  }
+
+//+------------------------------------------------------------------+
+//| Helper: read indicator buffer value using CopyBuffer             |
+//+------------------------------------------------------------------+
+double GetIndicatorValue(int handle,int buffer,int shift)
+  {
+   if(handle == INVALID_HANDLE)
+      return 0.0;
+
+   double values[];
+   if(CopyBuffer(handle, buffer, shift, 1, values) <= 0)
+      return 0.0;
+
+   return values[0];
   }
 
 //+------------------------------------------------------------------+
@@ -360,8 +389,7 @@ void UpdateEquityTracking()
    if(equity > g_EquityHigh || g_EquityHigh == 0.0)
       g_EquityHigh = equity;
 
-   datetime now      = TimeCurrent();
-   int      cur_date = TimeDay(now);
+   int cur_date = TimeDay(TimeCurrent());
 
    if(cur_date != g_DailyDate)
      {
@@ -473,10 +501,8 @@ int GetTotalOpenPositionsForSymbol(string symbol, ulong magic)
 //+------------------------------------------------------------------+
 bool IsTradingAllowedNow()
   {
-   datetime now = TimeCurrent();
-
    // session
-   int hour = TimeHour(now);
+   int hour = TimeHour(TimeCurrent());
    if(InpUseSessionFilter)
      {
       if(hour < g_SessionStartHour || hour > g_SessionEndHour)
@@ -502,10 +528,10 @@ bool IsTradingAllowedNow()
    // ATR volatility filter
    if(InpUseATRVolFilter)
      {
-      double atr = iATR(g_symbol, InpFVGTF, InpATRPeriod, 0);
+      double atr = GetIndicatorValue(g_ATRHandle_FVG, 0, 0);
       if(atr > 0)
         {
-         double atr_avg = iATR(g_symbol, InpFVGTF, InpATRPeriod * 3, 0);
+         double atr_avg = GetIndicatorValue(g_ATRHandle_FVG_Long, 0, 0);
          if(atr_avg > 0 && atr > atr_avg * g_ATRVolMaxMult)
             return false;
         }
@@ -525,7 +551,7 @@ bool IsTradingAllowedNow()
 //+------------------------------------------------------------------+
 void UpdateHTFTrend()
   {
-   double ema   = iMA(g_symbol, InpHTFTrendTF, InpBiasEMAPeriod, 0, MODE_EMA, PRICE_CLOSE, 0);
+   double ema   = GetIndicatorValue(g_EMAHandle_HTF, 0, 0);
    double price = iClose(g_symbol, InpHTFTrendTF, 0);
 
    if(ema == 0.0)
@@ -992,7 +1018,7 @@ void ManageOpenPositions()
       // Adaptive trailing ala Quantum Queen (prioritas di atas ATR trailing biasa)
       if(InpUseAdaptiveTrailing)
         {
-         double atr = iATR(g_symbol, InpFVGTF, InpATRPeriod, 0);
+         double atr = GetIndicatorValue(g_ATRHandle_FVG, 0, 0);
          if(atr > 0)
            {
             double trailMult = 0.0;
@@ -1023,7 +1049,7 @@ void ManageOpenPositions()
         }
       else if(InpUseATRTrailing && rr_now >= InpATRTrailTriggerRR)
         {
-         double atr = iATR(g_symbol, InpFVGTF, InpATRPeriod, 0);
+         double atr = GetIndicatorValue(g_ATRHandle_FVG, 0, 0);
          if(atr > 0)
            {
             double trail_dist = atr * InpATRTrailMultiplier;

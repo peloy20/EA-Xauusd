@@ -162,6 +162,29 @@ int         g_ATRHandle_FVG_Long    = INVALID_HANDLE;
 int         g_EMAHandle_HTF         = INVALID_HANDLE;
 
 //+------------------------------------------------------------------+
+//| Forward declarations                                             |
+//+------------------------------------------------------------------+
+bool   UpdateSignalsOnNewBar();
+void   CheckAndExecuteEntries();
+void   UpdateEquityTracking();
+bool   IsDailyLossLimitHit();
+bool   IsMaxDDHit();
+void   CloseAllPositions();
+int    GetTotalOpenPositionsForSymbol(string symbol, ulong magic);
+bool   IsTradingAllowedNow();
+void   ManageOpenPositions();
+void   TryOpenBuy();
+void   TryOpenSell();
+void   UpdateHTFTrend();
+void   UpdateSMCStructure();
+void   ScanFVGZones();
+bool   IsDiscountZonePrice(double price);
+bool   IsPremiumZonePrice(double price);
+bool   ExistBuySetup();
+bool   ExistSellSetup();
+double CalcLotByRisk(double sl_points);
+
+//+------------------------------------------------------------------+
 //| Utility: Get current symbol                                      |
 //+------------------------------------------------------------------+
 string GetSymbol()
